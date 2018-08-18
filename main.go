@@ -17,7 +17,7 @@ func main() {
 	var addr, user, pass, host string
 	var upnp bool
 
-	flag.StringVar(&addr, "addr", "192.168.8.138:5555", "port to listen on")
+	flag.StringVar(&addr, "addr", ":5555", "port to listen on")
 	flag.StringVar(&user, "username", "", "username for authentication")
 	flag.StringVar(&pass, "password", "", "password for authentication")
 	flag.StringVar(&host, "host", "", "host used for incomming connections")
