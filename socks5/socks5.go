@@ -1,9 +1,14 @@
 package socks5
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -42,6 +47,36 @@ func WithDialer(d *net.Dialer) Option {
 	}
 }
 
+//WithAddrProvider sets the addrerss provider used for bind and udp
+func WithAddrProvider(a AddrProvider) Option {
+	return func(s *Server) {
+		s.AddrProvider = a
+	}
+}
+
+//WithListener sets the is the listener used by the Bind Command
+func WithListener(l Listener) Option {
+	return func(s *Server) {
+		s.Listen = l
+	}
+}
+
+//WithPacketListener sets the addrerss provider used for bind and udp
+func WithPacketListener(l PacketListener) Option {
+	return func(s *Server) {
+		s.ListenPacket = l
+	}
+}
+
+//PacketListener is the listner used for udp
+type PacketListener func(network, address string) (net.PacketConn, error)
+
+//Listener is the listner used for bind
+type Listener func(network, address string) (net.Listener, error)
+
+//AddrProvider provider address for bind and udp
+type AddrProvider func(addr net.Addr) string
+
 //Server holds parameters for thr server
 type Server struct {
 	//Addr is the address to listen on for incomming connections
@@ -60,10 +95,13 @@ type Server struct {
 	Dialer *net.Dialer
 
 	//Listen is the listener used by the Bind Command
-	Listen func(network, address string) (net.Listener, error)
+	Listen Listener
 
-	//ListenPacket is the listener used by the Bind Command
-	ListenPacket func(network, address string) (net.PacketConn, error)
+	//ListenPacket is the listener used by the udp association Command
+	ListenPacket PacketListener
+
+	//AddrProvider is the addr provider used for bind and udp
+	AddrProvider AddrProvider
 
 	mu       sync.RWMutex
 	doneChan chan struct{}
@@ -74,9 +112,6 @@ type Server struct {
 // if addrs is empty then it listen on port 0.0.0.0:1080, by default no authentication and only support
 // for connect command for IPv4
 func ListenAndServe(addr string, opts ...Option) error {
-	if addr == "" {
-		addr = ":1080"
-	}
 	s := &Server{Addr: addr, Cmds: []Command{CommandConnect}, Dialer: new(net.Dialer)}
 	for _, opt := range opts {
 		opt(s)
@@ -155,6 +190,14 @@ func (s *Server) checkDefaults() {
 	if s.ListenPacket == nil {
 		s.ListenPacket = net.ListenPacket
 	}
+
+	if s.AddrProvider == nil {
+		s.AddrProvider = nopAddrProvider
+	}
+}
+
+func nopAddrProvider(addr net.Addr) string {
+	return addr.String()
 }
 
 func (s *Server) getDoneChan() <-chan struct{} {
@@ -215,6 +258,7 @@ func (s *Server) handleConnection(c *conn) {
 		}
 		return
 	}
+	//Remove
 	log.Println(cmd, addr, err)
 	switch cmd {
 	case CommandConnect:
@@ -245,14 +289,13 @@ func (s *Server) handleConnect(c *conn, addr net.Addr) error {
 
 //handles bind commmand
 func (s *Server) handleBind(c *conn, addr net.Addr) error {
-	log.Println("Bind", addr)
-	l, err := s.Listen("tcp", addr.String())
+	l, err := s.Listen("tcp", "")
 	if err != nil {
 		c.WriteError(responseGeneralFailure)
 		return err
 	}
 
-	err = c.WriteCommandResponse(responseSuccess, l.Addr().String())
+	err = c.WriteCommandResponse(responseSuccess, s.AddrProvider(l.Addr()))
 	if err != nil {
 		return err
 	}
@@ -273,79 +316,80 @@ func (s *Server) handleBind(c *conn, addr net.Addr) error {
 //TODO implement later
 func (s *Server) handleUDPAssociation(c *conn, addr net.Addr) error {
 	c.WriteError(responseCommandNotSupported)
-	// l, err := s.ListenPacket("udp", "")
-	// if err != nil {
-	// 	c.WriteError(responseGeneralFailure)
-	// 	return err
-	// }
-	// err = c.WriteCommandResponse(responseSuccess, l.LocalAddr().String()) //Use host
-	// if err != nil {
-	// 	return err
-	// }
+	l, err := s.ListenPacket("udp", "")
+	if err != nil {
+		c.WriteError(responseGeneralFailure)
+		return err
+	}
+	err = c.WriteCommandResponse(responseSuccess, s.AddrProvider(l.LocalAddr()))
+	if err != nil {
+		return err
+	}
 
-	// go func() {
-	// 	defer func() {
-	// 		recover()
-	// 	}()
-	// 	buf := make([]byte, 65536)
-	// 	for {
-	// 		n, _, err := l.ReadFrom(buf)
+	go func() {
+		defer func() {
+			recover()
+		}()
+		buf := make([]byte, 65536)
+		for {
+			n, _, err := l.ReadFrom(buf)
 
-	// 		if err != nil || n < 7 {
-	// 			continue
-	// 		}
+			if err != nil || n < 7 {
+				continue
+			}
 
-	// 		//two reserve bytes and one fragment number
-	// 		if !bytes.Equal(buf[:3], []byte{0, 0, 0}) {
-	// 			continue
-	// 		}
+			//two reserve bytes and one fragment number
+			if !bytes.Equal(buf[:3], []byte{0, 0, 0}) {
+				continue
+			}
 
-	// 		addrLength := 0
-	// 		domain := false
-	// 		offset := 4
+			addrLength := 0
+			domain := false
+			offset := 4
 
-	// 		switch AddrType(c.buf[3]) {
-	// 		case AddrTypeIPv4:
-	// 			addrLength = net.IPv4len
-	// 		case AddrTypeIPv6:
-	// 			addrLength = net.IPv6len
+			switch AddrType(c.buf[3]) {
+			case AddrTypeIPv4:
+				addrLength = net.IPv4len
+			case AddrTypeIPv6:
+				addrLength = net.IPv6len
 
-	// 		case AddrTypeDomain:
-	// 			addrLength = int(c.buf[4])
-	// 			domain = true
-	// 			offset++
-	// 		default:
-	// 			continue
-	// 		}
+			case AddrTypeDomain:
+				addrLength = int(c.buf[4])
+				domain = true
+				offset++
+			default:
+				continue
+			}
 
-	// 		addrBytes := buf[offset : offset+addrLength+1]
+			addrBytes := buf[offset : offset+addrLength+1]
 
-	// 		port := int(binary.BigEndian.Uint16(c.buf[offset+addrLength+1 : offset+addrLength+2]))
+			port := int(binary.BigEndian.Uint16(c.buf[offset+addrLength+1 : offset+addrLength+2]))
 
-	// 		targetHost := string(addrBytes)
+			targetHost := string(addrBytes)
 
-	// 		if !domain {
-	// 			ip := net.IP(addrBytes)
-	// 			targetHost = ip.String()
-	// 		}
+			if !domain {
+				ip := net.IP(addrBytes)
+				targetHost = ip.String()
+			}
 
-	// 		raddr := net.JoinHostPort(targetHost, strconv.Itoa(port))
+			raddr := net.JoinHostPort(targetHost, strconv.Itoa(port))
 
-	// 		rconn, err := net.Dial("udp", raddr)
-	// 		if err != nil { //not sure
-	// 			continue
-	// 		}
-	// 		_, err = rconn.Write(buf[offset+addrLength+2 : n])
-	// 		if err != nil { //not sure
-	// 			continue
-	// 		}
-	// 	}
+			rconn, err := net.Dial("udp", raddr)
+			if err != nil { //not sure
+				continue
+			}
+			_, err = rconn.Write(buf[offset+addrLength+2 : n])
+			if err != nil { //not sure
+				continue
+			}
+		}
 
-	// }()
+	}()
 
-	// err = c.WriteCommandResponse(responseSuccess, l.LocalAddr().String())
-	// if err != nil {
-	// 	return err
-	// }
+	err = c.WriteCommandResponse(responseSuccess, l.LocalAddr().String())
+	if err != nil {
+		return err
+	}
+	io.Copy(ioutil.Discard, c)
 	return nil
 }
