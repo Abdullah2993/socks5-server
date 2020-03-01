@@ -19,6 +19,7 @@ func TestConnectCommand(t *testing.T) {
 	}))
 	<-time.After(5 * time.Second)
 	sendAndTestReq(t, "http://localhost:8089", "socks5://localhost:8088")
+	sendAndTestReq(t, "http://127.0.0.1:8089", "socks5://localhost:8088")
 }
 
 func TestConnectCommandWithAuth(t *testing.T) {
@@ -30,6 +31,7 @@ func TestConnectCommandWithAuth(t *testing.T) {
 	<-time.After(5 * time.Second)
 
 	sendAndTestReq(t, "http://localhost:8086", "socks5://username:password@localhost:8087")
+	sendAndTestReq(t, "http://127.0.0.1:8086", "socks5://username:password@localhost:8087")
 }
 
 func sendAndTestReq(t *testing.T, addr, proxy string) {

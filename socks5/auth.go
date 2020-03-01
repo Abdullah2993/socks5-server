@@ -68,6 +68,7 @@ func (r usernamePasswordAuth) Authenticate(cn net.Conn) (err error) {
 	}
 	pass := string(c.buf[:pl])
 
+	c.buf[0] = subNegotiationVer
 	c.buf[1] = 0x00
 	if user != r.Username || pass != r.Password {
 		c.buf[1] = 0xED

@@ -126,7 +126,7 @@ func (c *conn) ReadCommandRequest() (method Command, addr *socksAddr, err error)
 
 	c.buf[0] = c.buf[4]
 
-	if _, err = io.ReadFull(c, c.buf[offset:addrLength-offset+2]); err != nil {
+	if _, err = io.ReadFull(c, c.buf[offset:addrLength+2]); err != nil {
 		return
 	}
 
